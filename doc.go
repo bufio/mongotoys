@@ -1,1 +1,1 @@
-package mongotoys
+package mtoy

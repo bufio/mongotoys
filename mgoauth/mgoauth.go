@@ -8,6 +8,8 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
+	"github.com/bufio/mtoy"
+	"github.com/bufio/toys/model"
 	"github.com/bufio/toys/secure"
 	"github.com/bufio/toys/secure/membership"
 	"github.com/bufio/toys/secure/membership/sessions"
@@ -136,9 +138,10 @@ func (a *AuthMongoDBCtx) AddUserInfo(email, password string, info membership.Inf
 	return a.insertUser(u, notif, app)
 }
 
-func (a *AuthMongoDBCtx) DeleteUser(id string) error {
-	if bson.IsObjectIdHex(id) {
-		return a.userColl.RemoveId(bson.ObjectIdHex(id))
+func (a *AuthMongoDBCtx) DeleteUser(id interface{}) error {
+	idStr, ok := id.(string)
+	if ok && bson.IsObjectIdHex(idStr) {
+		return a.userColl.RemoveId(bson.ObjectIdHex(idStr))
 	}
 	return membership.ErrInvalidId
 }
@@ -193,7 +196,7 @@ func (a *AuthMongoDBCtx) GetUser() (*membership.User, error) {
 	mapinf, ok := a.sess.Get(a.sessionName).(map[string]interface{})
 	if ok {
 		var inf membership.SessionInfo
-		inf.Id = mapinf["_id"].(bson.ObjectId)
+		inf.Id = mapinf["_id"].(model.Identifier)
 		inf.At = mapinf["at"].(time.Time)
 		if inf.At.Add(a.threshold).After(time.Now()) {
 			user := membership.User{}
@@ -209,7 +212,7 @@ func (a *AuthMongoDBCtx) GetUser() (*membership.User, error) {
 	return nil, errors.New("auth: not logged-in")
 }
 
-func (a *AuthMongoDBCtx) FindUser(id string) (*membership.User, error) {
+func (a *AuthMongoDBCtx) FindUser(id interface{}) (*membership.User, error) {
 	u := &membership.User{}
 	return u, nil
 }
@@ -219,12 +222,12 @@ func (a *AuthMongoDBCtx) FindUserByEmail(email string) (*membership.User, error)
 	return u, nil
 }
 
-func (a *AuthMongoDBCtx) FindAllUser(offsetKey string, limit int) ([]*membership.User, error) {
+func (a *AuthMongoDBCtx) FindAllUser(offsetKey interface{}, limit int) ([]*membership.User, error) {
 	u := []*membership.User{}
 	return u, nil
 }
 
-func (a *AuthMongoDBCtx) FindUserOnline(offsetKey string, limit int) ([]*membership.User, error) {
+func (a *AuthMongoDBCtx) FindUserOnline(offsetKey interface{}, limit int) ([]*membership.User, error) {
 	u := []*membership.User{}
 	return u, nil
 }
@@ -249,11 +252,15 @@ func (a *AuthMongoDBCtx) ValidateUser(email string, password string) (*membershi
 	return u, nil
 }
 
-func (a *AuthMongoDBCtx) LogginUser(id string, remember int) error {
-	if !bson.IsObjectIdHex(id) {
+func (a *AuthMongoDBCtx) LogginUser(id interface{}, remember int) error {
+	idStr, ok := id.(string)
+	if !ok {
 		return membership.ErrInvalidId
 	}
-	oid := bson.ObjectIdHex(id)
+	if !bson.IsObjectIdHex(idStr) {
+		return membership.ErrInvalidId
+	}
+	oid := &mtoy.ID{bson.ObjectIdHex(idStr)}
 	if remember > 0 {
 		//use cookie a rememberColl
 		r := membership.RememberInfo{}
@@ -262,7 +269,7 @@ func (a *AuthMongoDBCtx) LogginUser(id string, remember int) error {
 		r.Token = base64.URLEncoding.EncodeToString(secure.RandomToken(128))
 		http.SetCookie(a.respw, &http.Cookie{
 			Name:    a.cookieName,
-			Value:   id + "|" + r.Token,
+			Value:   idStr + "|" + r.Token,
 			Expires: r.Exp,
 		})
 		return a.rememberColl.Insert(&r)
