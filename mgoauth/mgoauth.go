@@ -80,7 +80,7 @@ func (a *AuthMongoDBCtx) SetFormatChecker(c membership.FormatChecker) {
 	a.fmtChecker = c
 }
 
-func (a *AuthMongoDBCtx) createUser(email, password string, app bool) (*membership.User, error) {
+func (a *AuthMongoDBCtx) createUser(email, password string, app bool) (membership.User, error) {
 	if !a.fmtChecker.EmailValidate(email) {
 		return nil, membership.ErrInvalidEmail
 	}
@@ -88,7 +88,7 @@ func (a *AuthMongoDBCtx) createUser(email, password string, app bool) (*membersh
 		return nil, membership.ErrInvalidPassword
 	}
 
-	u := &membership.User{}
+	u := &Account{}
 	u.Email = email
 	u.Pwd.InitAt = time.Now()
 	u.Pwd.Salt = secure.RandomToken(32)
@@ -101,7 +101,7 @@ func (a *AuthMongoDBCtx) createUser(email, password string, app bool) (*membersh
 	return u, nil
 }
 
-func (a *AuthMongoDBCtx) insertUser(u *membership.User, notif, app bool) error {
+func (a *AuthMongoDBCtx) insertUser(u membership.User, notif, app bool) error {
 	err := a.userColl.Insert(u)
 	if err != nil {
 		if mgo.IsDup(err) {
@@ -111,7 +111,7 @@ func (a *AuthMongoDBCtx) insertUser(u *membership.User, notif, app bool) error {
 	}
 
 	if notif {
-		return a.notifer.AccountAdded(u.Email, app)
+		return a.notifer.AccountAdded(u.GetEmail(), app)
 	}
 	return nil
 }
@@ -125,15 +125,15 @@ func (a *AuthMongoDBCtx) AddUser(email, password string, notif, app bool) error 
 	return a.insertUser(u, notif, app)
 }
 
-func (a *AuthMongoDBCtx) AddUserInfo(email, password string, info membership.Info,
+func (a *AuthMongoDBCtx) AddUserInfo(email, password string, info *membership.Information,
 	pri map[string]bool, notif, app bool) error {
 	u, err := a.createUser(email, password, app)
 	if err != nil {
 		return err
 	}
 
-	u.Info = info
-	u.Privilege = pri
+	u.SetInfomation(info)
+	u.SetPrivilege(pri)
 
 	return a.insertUser(u, notif, app)
 }
@@ -146,7 +146,7 @@ func (a *AuthMongoDBCtx) DeleteUser(id interface{}) error {
 	return membership.ErrInvalidId
 }
 
-func (a *AuthMongoDBCtx) GetUser() (*membership.User, error) {
+func (a *AuthMongoDBCtx) GetUser() (membership.User, error) {
 	//check for remember cookie
 	cookie, err := a.req.Cookie(a.cookieName)
 	if err == nil {
@@ -165,7 +165,7 @@ func (a *AuthMongoDBCtx) GetUser() (*membership.User, error) {
 						//delete expried auth
 						goto DelCookie
 					}
-					user := membership.User{}
+					user := Account{}
 					err = a.userColl.FindId(oid).One(&user)
 					if err == nil {
 						//re-generate token
@@ -199,7 +199,7 @@ func (a *AuthMongoDBCtx) GetUser() (*membership.User, error) {
 		inf.Id = mapinf["_id"].(model.Identifier)
 		inf.At = mapinf["at"].(time.Time)
 		if inf.At.Add(a.threshold).After(time.Now()) {
-			user := membership.User{}
+			user := Account{}
 			err = a.userColl.FindId(inf.Id).One(&user)
 			if err == nil {
 				return &user, nil
@@ -212,23 +212,23 @@ func (a *AuthMongoDBCtx) GetUser() (*membership.User, error) {
 	return nil, errors.New("auth: not logged-in")
 }
 
-func (a *AuthMongoDBCtx) FindUser(id interface{}) (*membership.User, error) {
-	u := &membership.User{}
+func (a *AuthMongoDBCtx) FindUser(id interface{}) (membership.User, error) {
+	u := &Account{}
 	return u, nil
 }
 
-func (a *AuthMongoDBCtx) FindUserByEmail(email string) (*membership.User, error) {
-	u := &membership.User{}
+func (a *AuthMongoDBCtx) FindUserByEmail(email string) (membership.User, error) {
+	u := &Account{}
 	return u, nil
 }
 
-func (a *AuthMongoDBCtx) FindAllUser(offsetKey interface{}, limit int) ([]*membership.User, error) {
-	u := []*membership.User{}
+func (a *AuthMongoDBCtx) FindAllUser(offsetKey interface{}, limit int) ([]membership.User, error) {
+	u := []membership.User{}
 	return u, nil
 }
 
-func (a *AuthMongoDBCtx) FindUserOnline(offsetKey interface{}, limit int) ([]*membership.User, error) {
-	u := []*membership.User{}
+func (a *AuthMongoDBCtx) FindUserOnline(offsetKey interface{}, limit int) ([]membership.User, error) {
+	u := []membership.User{}
 	return u, nil
 }
 
@@ -236,8 +236,8 @@ func (a *AuthMongoDBCtx) CountUserOnline() int {
 	return 0
 }
 
-func (a *AuthMongoDBCtx) ValidateUser(email string, password string) (*membership.User, error) {
-	u := &membership.User{}
+func (a *AuthMongoDBCtx) ValidateUser(email string, password string) (membership.User, error) {
+	u := &Account{}
 	err := a.userColl.Find(bson.M{"email": email}).One(&u)
 	if err != nil {
 		return nil, err

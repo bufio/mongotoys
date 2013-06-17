@@ -10,11 +10,11 @@ type ID struct {
 	bson.ObjectId
 }
 
-func NewID() *ID {
-	return &ID{bson.NewObjectId()}
+func NewID() ID {
+	return ID{bson.NewObjectId()}
 }
 
-func (id *ID) Decode(i interface{}) error {
+func (id ID) Decode(i interface{}) error {
 	idStr, ok := i.(string)
 	if !ok {
 		return errors.New("mongotoys: Decode require a string")
@@ -28,6 +28,6 @@ func (id *ID) Decode(i interface{}) error {
 	return nil
 }
 
-func (id *ID) Encode() string {
+func (id ID) Encode() string {
 	return id.Hex()
 }
