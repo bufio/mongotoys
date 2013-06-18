@@ -37,6 +37,8 @@ type AuthMongoDBCtx struct {
 	domain       string
 }
 
+var _ membership.Authenticater = &AuthMongoDBCtx{}
+
 func NewAuthDBCtx(w http.ResponseWriter, r *http.Request, sess sessions.Provider,
 	userColl, rememberColl *mgo.Collection) *AuthMongoDBCtx {
 	a := &AuthMongoDBCtx{}
@@ -138,10 +140,12 @@ func (a *AuthMongoDBCtx) AddUserInfo(email, password string, info *membership.In
 	return a.insertUser(u, notif, app)
 }
 
-func (a *AuthMongoDBCtx) DeleteUser(id interface{}) error {
-	idStr, ok := id.(string)
-	if ok && bson.IsObjectIdHex(idStr) {
-		return a.userColl.RemoveId(bson.ObjectIdHex(idStr))
+func (a *AuthMongoDBCtx) DeleteUser(id model.Identifier) error {
+	tid, ok := id.(mtoy.ID)
+	if ok && tid.Valid() {
+		return a.userColl.RemoveId(tid.ObjectId)
+	} else if bson.IsObjectIdHex(id.Encode()) {
+		return a.userColl.RemoveId(bson.ObjectIdHex(id.Encode()))
 	}
 	return membership.ErrInvalidId
 }
@@ -155,7 +159,7 @@ func (a *AuthMongoDBCtx) GetUser() (membership.User, error) {
 		id := cookie.Value[:pos]
 		token := cookie.Value[pos+1:]
 		if bson.IsObjectIdHex(id) {
-			r := membership.RememberInfo{}
+			r := RememberInfo{}
 			oid := bson.ObjectIdHex(id)
 			//validate
 			err = a.rememberColl.FindId(oid).One(&r)
@@ -195,8 +199,8 @@ func (a *AuthMongoDBCtx) GetUser() (membership.User, error) {
 	//check for session
 	mapinf, ok := a.sess.Get(a.sessionName).(map[string]interface{})
 	if ok {
-		var inf membership.SessionInfo
-		inf.Id = mapinf["_id"].(model.Identifier)
+		var inf SessionInfo
+		inf.Id = mapinf["_id"].(mtoy.ID).ObjectId
 		inf.At = mapinf["at"].(time.Time)
 		if inf.At.Add(a.threshold).After(time.Now()) {
 			user := Account{}
@@ -212,7 +216,7 @@ func (a *AuthMongoDBCtx) GetUser() (membership.User, error) {
 	return nil, errors.New("auth: not logged-in")
 }
 
-func (a *AuthMongoDBCtx) FindUser(id interface{}) (membership.User, error) {
+func (a *AuthMongoDBCtx) FindUser(id model.Identifier) (membership.User, error) {
 	u := &Account{}
 	return u, nil
 }
@@ -222,12 +226,12 @@ func (a *AuthMongoDBCtx) FindUserByEmail(email string) (membership.User, error) 
 	return u, nil
 }
 
-func (a *AuthMongoDBCtx) FindAllUser(offsetKey interface{}, limit int) ([]membership.User, error) {
+func (a *AuthMongoDBCtx) FindAllUser(offsetKey model.Identifier, limit int) ([]membership.User, error) {
 	u := []membership.User{}
 	return u, nil
 }
 
-func (a *AuthMongoDBCtx) FindUserOnline(offsetKey interface{}, limit int) ([]membership.User, error) {
+func (a *AuthMongoDBCtx) FindUserOnline(offsetKey model.Identifier, limit int) ([]membership.User, error) {
 	u := []membership.User{}
 	return u, nil
 }
@@ -252,32 +256,34 @@ func (a *AuthMongoDBCtx) ValidateUser(email string, password string) (membership
 	return u, nil
 }
 
-func (a *AuthMongoDBCtx) LogginUser(id interface{}, remember int) error {
-	idStr, ok := id.(string)
+func (a *AuthMongoDBCtx) LogginUser(id model.Identifier, remember int) error {
+	tid, ok := id.(mtoy.ID)
 	if !ok {
-		return membership.ErrInvalidId
+		if !bson.IsObjectIdHex(tid.Encode()) {
+			return membership.ErrInvalidId
+		} else {
+			tid = mtoy.ID{bson.ObjectIdHex(tid.Encode())}
+		}
 	}
-	if !bson.IsObjectIdHex(idStr) {
-		return membership.ErrInvalidId
-	}
-	oid := &mtoy.ID{bson.ObjectIdHex(idStr)}
+
 	if remember > 0 {
 		//use cookie a rememberColl
-		r := membership.RememberInfo{}
-		r.Id = oid
+		//TODO: change the use of RememberInfo
+		r := RememberInfo{}
+		r.Id = tid.ObjectId
 		r.Exp = time.Now().Add(time.Duration(remember) * time.Second)
 		r.Token = base64.URLEncoding.EncodeToString(secure.RandomToken(128))
 		http.SetCookie(a.respw, &http.Cookie{
 			Name:    a.cookieName,
-			Value:   idStr + "|" + r.Token,
+			Value:   tid.Encode() + "|" + r.Token,
 			Expires: r.Exp,
 		})
 		return a.rememberColl.Insert(&r)
 	} else {
 		//use session
-		s := membership.SessionInfo{}
+		s := SessionInfo{}
 		s.At = time.Now()
-		s.Id = oid
+		s.Id = tid.ObjectId
 		return a.sess.Set(a.sessionName, s)
 	}
 	return nil
