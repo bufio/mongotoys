@@ -1,9 +1,9 @@
 package mgoauth
 
 import (
-	"github.com/bufio/mtoy"
-	"github.com/bufio/toys/model"
-	"github.com/bufio/toys/secure/membership"
+	"github.com/kidstuff/mtoy"
+	"github.com/kidstuff/toys/model"
+	"github.com/kidstuff/toys/secure/membership"
 	"labix.org/v2/mgo/bson"
 )
 

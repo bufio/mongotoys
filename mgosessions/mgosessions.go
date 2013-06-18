@@ -5,7 +5,7 @@ package mgosessions
 
 import (
 	"errors"
-	"github.com/bufio/toys/secure/membership/sessions"
+	"github.com/kidstuff/toys/secure/membership/sessions"
 	"labix.org/v2/mgo"
 	"labix.org/v2/mgo/bson"
 	"net/http"

@@ -5,7 +5,7 @@ import (
 	"labix.org/v2/mgo/bson"
 )
 
-// ID a wraper for bson.ObjectId implements github.com/bufio/toys/model#Identifier
+// ID a wraper for bson.ObjectId implements github.com/kidstuff/toys/model#Identifier
 type ID struct {
 	bson.ObjectId
 }
