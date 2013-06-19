@@ -144,8 +144,6 @@ func (a *AuthMongoDBCtx) DeleteUser(id model.Identifier) error {
 	tid, ok := id.(mtoy.ID)
 	if ok && tid.Valid() {
 		return a.userColl.RemoveId(tid.ObjectId)
-	} else if bson.IsObjectIdHex(id.Encode()) {
-		return a.userColl.RemoveId(bson.ObjectIdHex(id.Encode()))
 	}
 	return membership.ErrInvalidId
 }
@@ -217,26 +215,96 @@ func (a *AuthMongoDBCtx) GetUser() (membership.User, error) {
 }
 
 func (a *AuthMongoDBCtx) FindUser(id model.Identifier) (membership.User, error) {
+	tid, ok := id.(mtoy.ID)
+	if !ok {
+		return nil, membership.ErrInvalidId
+	}
+
 	u := &Account{}
+	err := a.userColl.FindId(tid.ObjectId).One(u)
+	if err != nil {
+		return nil, err
+	}
+
 	return u, nil
 }
 
 func (a *AuthMongoDBCtx) FindUserByEmail(email string) (membership.User, error) {
+	if !a.fmtChecker.EmailValidate(email) {
+		return nil, membership.ErrInvalidEmail
+	}
+
 	u := &Account{}
+	err := a.userColl.Find(bson.M{"email": email}).One(u)
+	if err != nil {
+		return nil, err
+	}
+
 	return u, nil
 }
 
-func (a *AuthMongoDBCtx) FindAllUser(offsetKey model.Identifier, limit int) ([]membership.User, error) {
-	u := []membership.User{}
-	return u, nil
+func (a *AuthMongoDBCtx) FindAllUser(offsetKey model.Identifier, limit int) (membership.UserLister, error) {
+	if limit < 0 {
+		return nil, nil
+	}
+
+	tid, ok := offsetKey.(mtoy.ID)
+	if !ok {
+		return nil, membership.ErrInvalidId
+	}
+
+	var accounts []Account
+	if limit > 0 {
+		accounts = make([]Account, 0, limit)
+	} else {
+		accounts = []Account{}
+	}
+
+	err := a.userColl.Find(bson.M{"_id": bson.M{"$gt": tid.ObjectId}}).Limit(limit).All(&accounts)
+	if err != nil {
+		return nil, err
+	}
+
+	return &AccountList{accounts}, nil
 }
 
-func (a *AuthMongoDBCtx) FindUserOnline(offsetKey model.Identifier, limit int) ([]membership.User, error) {
-	u := []membership.User{}
-	return u, nil
+func (a *AuthMongoDBCtx) FindUserOnline(offsetKey model.Identifier, limit int) (membership.UserLister, error) {
+	if limit < 0 {
+		return nil, nil
+	}
+
+	tid, ok := offsetKey.(mtoy.ID)
+	if !ok {
+		return nil, membership.ErrInvalidId
+	}
+
+	var accounts []Account
+	if limit > 0 {
+		accounts = make([]Account, 0, limit)
+	} else {
+		accounts = []Account{}
+	}
+
+	err := a.userColl.Find(bson.M{
+		"_id":          bson.M{"$gt": tid.ObjectId},
+		"lastactivity": bson.M{"$lt": time.Now().Add(-a.sess.Expiration())},
+	}).Limit(limit).All(&accounts)
+
+	if err != nil {
+		return nil, err
+	}
+
+	return &AccountList{accounts}, nil
 }
 
 func (a *AuthMongoDBCtx) CountUserOnline() int {
+	n, err := a.userColl.Find(bson.M{"lastactivity": bson.M{
+		"$lt": time.Now().Add(-a.sess.Expiration()),
+	}}).Count()
+	if err == nil {
+		return n
+	}
+
 	return 0
 }
 
@@ -259,11 +327,7 @@ func (a *AuthMongoDBCtx) ValidateUser(email string, password string) (membership
 func (a *AuthMongoDBCtx) LogginUser(id model.Identifier, remember int) error {
 	tid, ok := id.(mtoy.ID)
 	if !ok {
-		if !bson.IsObjectIdHex(tid.Encode()) {
-			return membership.ErrInvalidId
-		} else {
-			tid = mtoy.ID{bson.ObjectIdHex(tid.Encode())}
-		}
+		return membership.ErrInvalidId
 	}
 
 	if remember > 0 {

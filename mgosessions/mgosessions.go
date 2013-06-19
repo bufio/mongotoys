@@ -22,7 +22,7 @@ type MgoProvider struct {
 	req        *http.Request
 	resp       http.ResponseWriter
 	cookieName string
-	expiration int
+	expiration time.Duration
 	matchAddr  bool
 	matchAgent bool
 	collection *mgo.Collection
@@ -34,7 +34,7 @@ func NewMgoProvider(w http.ResponseWriter, r *http.Request,
 	p.req = r
 	p.resp = w
 	p.cookieName = "toysSession"
-	p.expiration = 7200
+	p.expiration = 7200 * time.Second
 	p.matchAddr = true
 	p.collection = c
 
@@ -49,20 +49,20 @@ func (p *MgoProvider) CookieName() string {
 	return p.cookieName
 }
 
-func (p *MgoProvider) SetExpiration(exp int) {
-	if exp <= 0 {
-		p.expiration = 7200
+func (p *MgoProvider) SetExpiration(exp time.Duration) {
+	if exp <= 1*time.Second {
+		p.expiration = 7200 * time.Second
 		return
 	}
 	p.expiration = exp
 	p.collection.EnsureIndex(mgo.Index{
 		Key:         []string{"lastactivity"},
-		ExpireAfter: time.Duration(p.Expiration()) * time.Second,
+		ExpireAfter: exp,
 		Sparse:      true,
 	})
 }
 
-func (p *MgoProvider) Expiration() int {
+func (p *MgoProvider) Expiration() time.Duration {
 	return p.expiration
 }
 
@@ -113,11 +113,10 @@ func (p *MgoProvider) setData(name string, val interface{}, flash bool) error {
 	entry, lerr := p.load()
 	if lerr != nil {
 		http.SetCookie(p.resp, &http.Cookie{
-			Name:   p.cookieName,
-			Value:  entry.Id,
-			MaxAge: p.Expiration(),
-			Expires: entry.LastActivity.
-				Add(time.Duration(p.Expiration()) * time.Second),
+			Name:    p.cookieName,
+			Value:   entry.Id,
+			MaxAge:  int(p.Expiration().Seconds()),
+			Expires: entry.LastActivity.Add(p.Expiration()),
 		})
 	}
 
