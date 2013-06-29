@@ -35,6 +35,7 @@ type AuthMongoDBCtx struct {
 	sessionName  string
 	path         string
 	domain       string
+	configfile   string
 }
 
 var _ membership.Authenticater = &AuthMongoDBCtx{}
@@ -50,7 +51,7 @@ func NewAuthDBCtx(w http.ResponseWriter, r *http.Request, sess sessions.Provider
 	a.cookieName = "toysAuthCookie"
 	a.sessionName = "toysAuthSession"
 	a.fmtChecker, _ = membership.NewSimpleChecker(8)
-	a.notifer = membership.NewSimpleNotificater()
+	//a.notifer
 	a.pwdHash = sha256.New()
 	a.threshold = 900 * time.Second
 	return a
@@ -82,7 +83,23 @@ func (a *AuthMongoDBCtx) SetFormatChecker(c membership.FormatChecker) {
 	a.fmtChecker = c
 }
 
-func (a *AuthMongoDBCtx) createUser(email, password string, app bool) (membership.User, error) {
+func (a *AuthMongoDBCtx) GeneratePassword(password string) membership.Password {
+	if len(password) == 0 {
+		password = secure.RandomString(16)
+	}
+
+	pwd := membership.Password{}
+	pwd.InitAt = time.Now()
+	pwd.Salt = secure.RandomToken(32)
+	a.pwdHash.Write([]byte(password))
+	a.pwdHash.Write(pwd.Salt)
+	pwd.Hashed = a.pwdHash.Sum(nil)
+	a.pwdHash.Reset()
+
+	return pwd
+}
+
+func (a *AuthMongoDBCtx) createUser(email, password string, app bool) (*Account, error) {
 	if !a.fmtChecker.EmailValidate(email) {
 		return nil, membership.ErrInvalidEmail
 	}
@@ -91,19 +108,15 @@ func (a *AuthMongoDBCtx) createUser(email, password string, app bool) (membershi
 	}
 
 	u := &Account{}
+	u.Id = bson.NewObjectId()
 	u.Email = email
-	u.Pwd.InitAt = time.Now()
-	u.Pwd.Salt = secure.RandomToken(32)
-	a.pwdHash.Write([]byte(password))
-	a.pwdHash.Write(u.Pwd.Salt)
-	u.Pwd.Hashed = a.pwdHash.Sum(nil)
-	a.pwdHash.Reset()
+	u.Pwd = a.GeneratePassword(password)
 
 	u.Approved = app
 	return u, nil
 }
 
-func (a *AuthMongoDBCtx) insertUser(u membership.User, notif, app bool) error {
+func (a *AuthMongoDBCtx) insertUser(u *Account, notif, app bool) error {
 	err := a.userColl.Insert(u)
 	if err != nil {
 		if mgo.IsDup(err) {
@@ -113,7 +126,7 @@ func (a *AuthMongoDBCtx) insertUser(u membership.User, notif, app bool) error {
 	}
 
 	if notif {
-		return a.notifer.AccountAdded(u.GetEmail(), app)
+		return a.notifer.AccountAdded(u)
 	}
 	return nil
 }
@@ -134,8 +147,8 @@ func (a *AuthMongoDBCtx) AddUserInfo(email, password string, info *membership.In
 		return err
 	}
 
-	u.SetInfomation(info)
-	u.SetPrivilege(pri)
+	u.Info = *info
+	u.Privilege = pri
 
 	return a.insertUser(u, notif, app)
 }
@@ -210,8 +223,8 @@ func (a *AuthMongoDBCtx) GetUser() (membership.User, error) {
 			a.sess.Delete(a.sessionName)
 		}
 	}
-	//not logged-in
-	return nil, errors.New("auth: not logged-in")
+	//not Loged-in
+	return nil, errors.New("auth: not Loged-in")
 }
 
 func (a *AuthMongoDBCtx) FindUser(id model.Identifier) (membership.User, error) {
@@ -319,12 +332,12 @@ func (a *AuthMongoDBCtx) ValidateUser(email string, password string) (membership
 	hashed := a.pwdHash.Sum(nil)
 	a.pwdHash.Reset()
 	if bytes.Compare(u.Pwd.Hashed, hashed) != 0 {
-		return nil, err
+		return nil, membership.ErrInvalidPassword
 	}
 	return u, nil
 }
 
-func (a *AuthMongoDBCtx) LogginUser(id model.Identifier, remember int) error {
+func (a *AuthMongoDBCtx) Login(id model.Identifier, remember int) error {
 	tid, ok := id.(mtoy.ID)
 	if !ok {
 		return membership.ErrInvalidId
@@ -351,4 +364,89 @@ func (a *AuthMongoDBCtx) LogginUser(id model.Identifier, remember int) error {
 		return a.sess.Set(a.sessionName, s)
 	}
 	return nil
+}
+
+func (a *AuthMongoDBCtx) Logout() error {
+	cookie, err := a.req.Cookie(a.cookieName)
+	http.SetCookie(a.respw, &http.Cookie{
+		Name:   a.cookieName,
+		MaxAge: -1,
+	})
+
+	if err == nil {
+		//read and parse cookie
+		id := cookie.Value[:strings.Index(cookie.Value, "|")]
+		if bson.IsObjectIdHex(id) {
+			oid := bson.ObjectIdHex(id)
+			a.rememberColl.RemoveId(oid)
+		}
+	}
+
+	a.sess.Delete(a.sessionName)
+
+	return nil
+}
+
+func (a *AuthMongoDBCtx) UpdateInfo(id model.Identifier, info *membership.Information, notif bool) error {
+	tid, ok := id.(mtoy.ID)
+	if !ok {
+		return membership.ErrInvalidId
+	}
+	return a.userColl.UpdateId(tid.ObjectId, bson.M{"$set": bson.M{"info": info}})
+}
+
+func (a *AuthMongoDBCtx) UpdatePrivilege(id model.Identifier, pri map[string]bool, notif bool) error {
+	tid, ok := id.(mtoy.ID)
+	if !ok {
+		return membership.ErrInvalidId
+	}
+	return a.userColl.UpdateId(tid.ObjectId, bson.M{"$set": bson.M{"privilege": pri}})
+}
+
+func (a *AuthMongoDBCtx) ChangePassword(id model.Identifier, password string, notif bool) error {
+	tid, ok := id.(mtoy.ID)
+	if !ok {
+		return membership.ErrInvalidId
+	}
+
+	acc := Account{}
+	err := a.userColl.FindId(tid.ObjectId).One(&acc)
+	if err != nil {
+		return err
+	}
+
+	err = a.userColl.UpdateId(tid.ObjectId, bson.M{"$set": bson.M{
+		"oldpwd": acc.GetOldPassword(),
+		"pwd":    a.GeneratePassword(password),
+	}})
+	if err != nil {
+		return err
+	}
+
+	return a.notifer.PasswordChanged(&acc)
+}
+
+func (a *AuthMongoDBCtx) ValidConfirmCode(id model.Identifier, key, code string, regen, del bool) (bool, error) {
+	tid, ok := id.(mtoy.ID)
+	if !ok {
+		return false, membership.ErrInvalidId
+	}
+
+	acc := Account{}
+	err := a.userColl.FindId(tid.ObjectId).One(&acc)
+	if err != nil {
+		return false, err
+	}
+
+	ok = acc.ConfirmCodes[key] == code
+	change := bson.M{}
+	if del {
+		change["$unset"] = bson.M{"confirmcodes." + key: false}
+	} else {
+		change["$set"] = bson.M{"confirmcodes." + key: secure.RandomString(32)}
+	}
+
+	a.userColl.UpdateId(tid.ObjectId, change)
+
+	return ok, err
 }
