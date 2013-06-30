@@ -53,7 +53,7 @@ func NewAuthDBCtx(w http.ResponseWriter, r *http.Request, sess sessions.Provider
 	a.fmtChecker, _ = membership.NewSimpleChecker(8)
 	//a.notifer
 	a.pwdHash = sha256.New()
-	a.threshold = 900 * time.Second
+	a.threshold = 15 * time.Minute
 	return a
 }
 
@@ -65,9 +65,9 @@ func (a *AuthMongoDBCtx) SetDomain(d string) {
 	a.domain = d
 }
 
-func (a *AuthMongoDBCtx) SetOnlineThreshold(t int) {
+func (a *AuthMongoDBCtx) SetOnlineThreshold(t time.Duration) {
 	if t > 0 {
-		a.threshold = time.Duration(t) * time.Second
+		a.threshold = t
 	}
 }
 
@@ -256,14 +256,21 @@ func (a *AuthMongoDBCtx) FindUserByEmail(email string) (membership.User, error) 
 	return u, nil
 }
 
-func (a *AuthMongoDBCtx) FindAllUser(offsetKey model.Identifier, limit int) (membership.UserLister, error) {
+func (a *AuthMongoDBCtx) findAllUser(offsetKey model.Identifier, limit int, filter bson.M) (membership.UserLister, error) {
 	if limit < 0 {
 		return nil, nil
 	}
 
-	tid, ok := offsetKey.(mtoy.ID)
-	if !ok {
-		return nil, membership.ErrInvalidId
+	if offsetKey != nil {
+		tid, ok := offsetKey.(mtoy.ID)
+		if !ok {
+			return nil, membership.ErrInvalidId
+		} else {
+			if filter == nil {
+				filter = bson.M{}
+			}
+			filter["_id"] = bson.M{"$gt": tid.ObjectId}
+		}
 	}
 
 	var accounts []Account
@@ -273,41 +280,20 @@ func (a *AuthMongoDBCtx) FindAllUser(offsetKey model.Identifier, limit int) (mem
 		accounts = []Account{}
 	}
 
-	err := a.userColl.Find(bson.M{"_id": bson.M{"$gt": tid.ObjectId}}).Limit(limit).All(&accounts)
+	err := a.userColl.Find(filter).Limit(limit).All(&accounts)
 	if err != nil {
 		return nil, err
 	}
 
-	return &AccountList{accounts}, nil
+	return &AccountList{Accounts: accounts}, nil
 }
 
-func (a *AuthMongoDBCtx) FindUserOnline(offsetKey model.Identifier, limit int) (membership.UserLister, error) {
-	if limit < 0 {
-		return nil, nil
-	}
+func (a *AuthMongoDBCtx) FindAllUser(offsetKey model.Identifier, limit int) (membership.UserLister, error) {
+	return a.findAllUser(offsetKey, limit, nil)
+}
 
-	tid, ok := offsetKey.(mtoy.ID)
-	if !ok {
-		return nil, membership.ErrInvalidId
-	}
-
-	var accounts []Account
-	if limit > 0 {
-		accounts = make([]Account, 0, limit)
-	} else {
-		accounts = []Account{}
-	}
-
-	err := a.userColl.Find(bson.M{
-		"_id":          bson.M{"$gt": tid.ObjectId},
-		"lastactivity": bson.M{"$lt": time.Now().Add(-a.sess.Expiration())},
-	}).Limit(limit).All(&accounts)
-
-	if err != nil {
-		return nil, err
-	}
-
-	return &AccountList{accounts}, nil
+func (a *AuthMongoDBCtx) FindAllUserOnline(offsetKey model.Identifier, limit int) (membership.UserLister, error) {
+	return a.findAllUser(offsetKey, limit, bson.M{"lastactivity": bson.M{"$lt": time.Now().Add(-a.sess.Expiration())}})
 }
 
 func (a *AuthMongoDBCtx) CountUserOnline() int {
