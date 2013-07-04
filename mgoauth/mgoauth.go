@@ -21,7 +21,7 @@ import (
 	"time"
 )
 
-type AuthMongoDBCtx struct {
+type MgoUserCtx struct {
 	threshold    time.Duration
 	sess         sessions.Provider
 	req          *http.Request
@@ -35,55 +35,54 @@ type AuthMongoDBCtx struct {
 	sessionName  string
 	path         string
 	domain       string
-	configfile   string
 }
 
-var _ membership.Authenticater = &AuthMongoDBCtx{}
+var _ membership.UserManager = &MgoUserCtx{}
 
-func NewAuthDBCtx(w http.ResponseWriter, r *http.Request, sess sessions.Provider,
-	userColl, rememberColl *mgo.Collection) *AuthMongoDBCtx {
-	a := &AuthMongoDBCtx{}
-	a.respw = w
-	a.req = r
-	a.sess = sess
-	a.userColl = userColl
-	a.rememberColl = rememberColl
-	a.cookieName = "toysAuthCookie"
-	a.sessionName = "toysAuthSession"
-	a.fmtChecker, _ = membership.NewSimpleChecker(8)
-	//a.notifer
-	a.pwdHash = sha256.New()
-	a.threshold = 15 * time.Minute
-	return a
+func NewMgoUserCtx(w http.ResponseWriter, r *http.Request, sess sessions.Provider,
+	userColl, rememberColl *mgo.Collection) *MgoUserCtx {
+	ctx := &MgoUserCtx{}
+	ctx.respw = w
+	ctx.req = r
+	ctx.sess = sess
+	ctx.userColl = userColl
+	ctx.rememberColl = rememberColl
+	ctx.cookieName = "toysAuthCookie"
+	ctx.sessionName = "toysAuthSession"
+	ctx.fmtChecker, _ = membership.NewSimpleChecker(8)
+	//ctx.notifer
+	ctx.pwdHash = sha256.New()
+	ctx.threshold = 15 * time.Minute
+	return ctx
 }
 
-func (a *AuthMongoDBCtx) SetPath(p string) {
-	a.path = p
+func (ctx *MgoUserCtx) SetPath(p string) {
+	ctx.path = p
 }
 
-func (a *AuthMongoDBCtx) SetDomain(d string) {
-	a.domain = d
+func (ctx *MgoUserCtx) SetDomain(d string) {
+	ctx.domain = d
 }
 
-func (a *AuthMongoDBCtx) SetOnlineThreshold(t time.Duration) {
+func (ctx *MgoUserCtx) SetOnlineThreshold(t time.Duration) {
 	if t > 0 {
-		a.threshold = t
+		ctx.threshold = t
 	}
 }
 
-func (a *AuthMongoDBCtx) SetNotificater(n membership.Notificater) {
-	a.notifer = n
+func (ctx *MgoUserCtx) SetNotificater(n membership.Notificater) {
+	ctx.notifer = n
 }
 
-func (a *AuthMongoDBCtx) SetHashFunc(h hash.Hash) {
-	a.pwdHash = h
+func (ctx *MgoUserCtx) SetHashFunc(h hash.Hash) {
+	ctx.pwdHash = h
 }
 
-func (a *AuthMongoDBCtx) SetFormatChecker(c membership.FormatChecker) {
-	a.fmtChecker = c
+func (ctx *MgoUserCtx) SetFormatChecker(c membership.FormatChecker) {
+	ctx.fmtChecker = c
 }
 
-func (a *AuthMongoDBCtx) GeneratePassword(password string) membership.Password {
+func (ctx *MgoUserCtx) GeneratePassword(password string) membership.Password {
 	if len(password) == 0 {
 		password = secure.RandomString(16)
 	}
@@ -91,33 +90,33 @@ func (a *AuthMongoDBCtx) GeneratePassword(password string) membership.Password {
 	pwd := membership.Password{}
 	pwd.InitAt = time.Now()
 	pwd.Salt = secure.RandomToken(32)
-	a.pwdHash.Write([]byte(password))
-	a.pwdHash.Write(pwd.Salt)
-	pwd.Hashed = a.pwdHash.Sum(nil)
-	a.pwdHash.Reset()
+	ctx.pwdHash.Write([]byte(password))
+	ctx.pwdHash.Write(pwd.Salt)
+	pwd.Hashed = ctx.pwdHash.Sum(nil)
+	ctx.pwdHash.Reset()
 
 	return pwd
 }
 
-func (a *AuthMongoDBCtx) createUser(email, password string, app bool) (*Account, error) {
-	if !a.fmtChecker.EmailValidate(email) {
+func (ctx *MgoUserCtx) createUser(email, password string, app bool) (*Account, error) {
+	if !ctx.fmtChecker.EmailValidate(email) {
 		return nil, membership.ErrInvalidEmail
 	}
-	if !a.fmtChecker.PasswordValidate(password) {
+	if !ctx.fmtChecker.PasswordValidate(password) {
 		return nil, membership.ErrInvalidPassword
 	}
 
 	u := &Account{}
 	u.Id = bson.NewObjectId()
 	u.Email = email
-	u.Pwd = a.GeneratePassword(password)
+	u.Pwd = ctx.GeneratePassword(password)
 
 	u.Approved = app
 	return u, nil
 }
 
-func (a *AuthMongoDBCtx) insertUser(u *Account, notif, app bool) error {
-	err := a.userColl.Insert(u)
+func (ctx *MgoUserCtx) insertUser(u *Account, notif, app bool) error {
+	err := ctx.userColl.Insert(u)
 	if err != nil {
 		if mgo.IsDup(err) {
 			return membership.ErrDuplicateEmail
@@ -126,44 +125,54 @@ func (a *AuthMongoDBCtx) insertUser(u *Account, notif, app bool) error {
 	}
 
 	if notif {
-		return a.notifer.AccountAdded(u)
+		return ctx.notifer.AccountAdded(u)
 	}
 	return nil
 }
 
-func (a *AuthMongoDBCtx) AddUser(email, password string, notif, app bool) error {
-	u, err := a.createUser(email, password, app)
+func (ctx *MgoUserCtx) AddUser(email, password string, notif, app bool) (membership.User, error) {
+	u, err := ctx.createUser(email, password, app)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	return a.insertUser(u, notif, app)
+	err = ctx.insertUser(u, notif, app)
+	if err != nil {
+		return nil, err
+	}
+
+	return u, nil
 }
 
-func (a *AuthMongoDBCtx) AddUserInfo(email, password string, info *membership.Information,
-	pri map[string]bool, notif, app bool) error {
-	u, err := a.createUser(email, password, app)
+func (ctx *MgoUserCtx) AddUserDetail(email, password string, info *membership.UserInfo,
+	pri map[string]bool, notif, app bool) (membership.User, error) {
+	u, err := ctx.createUser(email, password, app)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	u.Info = *info
 	u.Privilege = pri
 
-	return a.insertUser(u, notif, app)
+	err = ctx.insertUser(u, notif, app)
+	if err != nil {
+		return nil, err
+	}
+
+	return u, nil
 }
 
-func (a *AuthMongoDBCtx) DeleteUser(id model.Identifier) error {
+func (ctx *MgoUserCtx) DeleteUser(id model.Identifier) error {
 	tid, ok := id.(mtoy.ID)
 	if ok && tid.Valid() {
-		return a.userColl.RemoveId(tid.ObjectId)
+		return ctx.userColl.RemoveId(tid.ObjectId)
 	}
 	return membership.ErrInvalidId
 }
 
-func (a *AuthMongoDBCtx) GetUser() (membership.User, error) {
+func (ctx *MgoUserCtx) GetUser() (membership.User, error) {
 	//check for remember cookie
-	cookie, err := a.req.Cookie(a.cookieName)
+	cookie, err := ctx.req.Cookie(ctx.cookieName)
 	if err == nil {
 		//read and parse cookie
 		pos := strings.Index(cookie.Value, "|")
@@ -173,7 +182,7 @@ func (a *AuthMongoDBCtx) GetUser() (membership.User, error) {
 			r := RememberInfo{}
 			oid := bson.ObjectIdHex(id)
 			//validate
-			err = a.rememberColl.FindId(oid).One(&r)
+			err = ctx.rememberColl.FindId(oid).One(&r)
 			if err == nil {
 				if token == r.Token {
 					if r.Exp.Before(time.Now()) {
@@ -181,16 +190,16 @@ func (a *AuthMongoDBCtx) GetUser() (membership.User, error) {
 						goto DelCookie
 					}
 					user := Account{}
-					err = a.userColl.FindId(oid).One(&user)
+					err = ctx.userColl.FindId(oid).One(&user)
 					if err == nil {
 						//re-generate token
 						token = base64.URLEncoding.EncodeToString(secure.RandomToken(128))
-						http.SetCookie(a.respw, &http.Cookie{
-							Name:    a.cookieName,
+						http.SetCookie(ctx.respw, &http.Cookie{
+							Name:    ctx.cookieName,
 							Value:   id + "|" + token,
 							Expires: r.Exp,
 						})
-						err = a.rememberColl.UpdateId(oid, bson.M{
+						err = ctx.rememberColl.UpdateId(oid, bson.M{
 							"$set": bson.M{"token": token},
 						})
 						if err == nil {
@@ -199,42 +208,42 @@ func (a *AuthMongoDBCtx) GetUser() (membership.User, error) {
 					}
 				}
 			}
-			a.rememberColl.RemoveId(oid)
+			ctx.rememberColl.RemoveId(oid)
 		}
 	DelCookie:
-		http.SetCookie(a.respw, &http.Cookie{
-			Name:   a.cookieName,
+		http.SetCookie(ctx.respw, &http.Cookie{
+			Name:   ctx.cookieName,
 			MaxAge: -1,
 		})
 	}
 	//check for session
-	mapinf, ok := a.sess.Get(a.sessionName).(map[string]interface{})
+	mapinf, ok := ctx.sess.Get(ctx.sessionName).(map[string]interface{})
 	if ok {
 		var inf SessionInfo
 		inf.Id = mapinf["_id"].(mtoy.ID).ObjectId
 		inf.At = mapinf["at"].(time.Time)
-		if inf.At.Add(a.threshold).After(time.Now()) {
+		if inf.At.Add(ctx.threshold).After(time.Now()) {
 			user := Account{}
-			err = a.userColl.FindId(inf.Id).One(&user)
+			err = ctx.userColl.FindId(inf.Id).One(&user)
 			if err == nil {
 				return &user, nil
 			}
 		} else {
-			a.sess.Delete(a.sessionName)
+			ctx.sess.Delete(ctx.sessionName)
 		}
 	}
 	//not Loged-in
 	return nil, errors.New("auth: not Loged-in")
 }
 
-func (a *AuthMongoDBCtx) FindUser(id model.Identifier) (membership.User, error) {
+func (ctx *MgoUserCtx) FindUser(id model.Identifier) (membership.User, error) {
 	tid, ok := id.(mtoy.ID)
 	if !ok {
 		return nil, membership.ErrInvalidId
 	}
 
 	u := &Account{}
-	err := a.userColl.FindId(tid.ObjectId).One(u)
+	err := ctx.userColl.FindId(tid.ObjectId).One(u)
 	if err != nil {
 		return nil, err
 	}
@@ -242,13 +251,13 @@ func (a *AuthMongoDBCtx) FindUser(id model.Identifier) (membership.User, error) 
 	return u, nil
 }
 
-func (a *AuthMongoDBCtx) FindUserByEmail(email string) (membership.User, error) {
-	if !a.fmtChecker.EmailValidate(email) {
+func (ctx *MgoUserCtx) FindUserByEmail(email string) (membership.User, error) {
+	if !ctx.fmtChecker.EmailValidate(email) {
 		return nil, membership.ErrInvalidEmail
 	}
 
 	u := &Account{}
-	err := a.userColl.Find(bson.M{"email": email}).One(u)
+	err := ctx.userColl.Find(bson.M{"email": email}).One(u)
 	if err != nil {
 		return nil, err
 	}
@@ -256,7 +265,7 @@ func (a *AuthMongoDBCtx) FindUserByEmail(email string) (membership.User, error) 
 	return u, nil
 }
 
-func (a *AuthMongoDBCtx) findAllUser(offsetKey model.Identifier, limit int, filter bson.M) (membership.UserLister, error) {
+func (ctx *MgoUserCtx) findAllUser(offsetKey model.Identifier, limit int, filter bson.M) ([]membership.User, error) {
 	if limit < 0 {
 		return nil, nil
 	}
@@ -280,25 +289,32 @@ func (a *AuthMongoDBCtx) findAllUser(offsetKey model.Identifier, limit int, filt
 		accounts = []Account{}
 	}
 
-	err := a.userColl.Find(filter).Limit(limit).All(&accounts)
+	err := ctx.userColl.Find(filter).Limit(limit).All(&accounts)
 	if err != nil {
 		return nil, err
 	}
 
-	return &AccountList{Accounts: accounts}, nil
+	n := len(accounts)
+	userLst := make([]membership.User, n, n)
+
+	for idx, acc := range accounts {
+		userLst[idx] = &acc
+	}
+
+	return userLst, nil
 }
 
-func (a *AuthMongoDBCtx) FindAllUser(offsetKey model.Identifier, limit int) (membership.UserLister, error) {
-	return a.findAllUser(offsetKey, limit, nil)
+func (ctx *MgoUserCtx) FindAllUser(offsetKey model.Identifier, limit int) ([]membership.User, error) {
+	return ctx.findAllUser(offsetKey, limit, nil)
 }
 
-func (a *AuthMongoDBCtx) FindAllUserOnline(offsetKey model.Identifier, limit int) (membership.UserLister, error) {
-	return a.findAllUser(offsetKey, limit, bson.M{"lastactivity": bson.M{"$lt": time.Now().Add(-a.sess.Expiration())}})
+func (ctx *MgoUserCtx) FindAllUserOnline(offsetKey model.Identifier, limit int) ([]membership.User, error) {
+	return ctx.findAllUser(offsetKey, limit, bson.M{"lastactivity": bson.M{"$lt": time.Now().Add(-ctx.sess.Expiration())}})
 }
 
-func (a *AuthMongoDBCtx) CountUserOnline() int {
-	n, err := a.userColl.Find(bson.M{"lastactivity": bson.M{
-		"$lt": time.Now().Add(-a.sess.Expiration()),
+func (ctx *MgoUserCtx) CountUserOnline() int {
+	n, err := ctx.userColl.Find(bson.M{"lastactivity": bson.M{
+		"$lt": time.Now().Add(-ctx.sess.Expiration()),
 	}}).Count()
 	if err == nil {
 		return n
@@ -307,23 +323,23 @@ func (a *AuthMongoDBCtx) CountUserOnline() int {
 	return 0
 }
 
-func (a *AuthMongoDBCtx) ValidateUser(email string, password string) (membership.User, error) {
+func (ctx *MgoUserCtx) ValidateUser(email string, password string) (membership.User, error) {
 	u := &Account{}
-	err := a.userColl.Find(bson.M{"email": email}).One(&u)
+	err := ctx.userColl.Find(bson.M{"email": email}).One(&u)
 	if err != nil {
 		return nil, err
 	}
-	a.pwdHash.Write([]byte(password))
-	a.pwdHash.Write(u.Pwd.Salt)
-	hashed := a.pwdHash.Sum(nil)
-	a.pwdHash.Reset()
+	ctx.pwdHash.Write([]byte(password))
+	ctx.pwdHash.Write(u.Pwd.Salt)
+	hashed := ctx.pwdHash.Sum(nil)
+	ctx.pwdHash.Reset()
 	if bytes.Compare(u.Pwd.Hashed, hashed) != 0 {
 		return nil, membership.ErrInvalidPassword
 	}
 	return u, nil
 }
 
-func (a *AuthMongoDBCtx) Login(id model.Identifier, remember int) error {
+func (ctx *MgoUserCtx) Login(id model.Identifier, remember int) error {
 	tid, ok := id.(mtoy.ID)
 	if !ok {
 		return membership.ErrInvalidId
@@ -336,26 +352,26 @@ func (a *AuthMongoDBCtx) Login(id model.Identifier, remember int) error {
 		r.Id = tid.ObjectId
 		r.Exp = time.Now().Add(time.Duration(remember) * time.Second)
 		r.Token = base64.URLEncoding.EncodeToString(secure.RandomToken(128))
-		http.SetCookie(a.respw, &http.Cookie{
-			Name:    a.cookieName,
+		http.SetCookie(ctx.respw, &http.Cookie{
+			Name:    ctx.cookieName,
 			Value:   tid.Encode() + "|" + r.Token,
 			Expires: r.Exp,
 		})
-		return a.rememberColl.Insert(&r)
+		return ctx.rememberColl.Insert(&r)
 	} else {
 		//use session
 		s := SessionInfo{}
 		s.At = time.Now()
 		s.Id = tid.ObjectId
-		return a.sess.Set(a.sessionName, s)
+		return ctx.sess.Set(ctx.sessionName, s)
 	}
 	return nil
 }
 
-func (a *AuthMongoDBCtx) Logout() error {
-	cookie, err := a.req.Cookie(a.cookieName)
-	http.SetCookie(a.respw, &http.Cookie{
-		Name:   a.cookieName,
+func (ctx *MgoUserCtx) Logout() error {
+	cookie, err := ctx.req.Cookie(ctx.cookieName)
+	http.SetCookie(ctx.respw, &http.Cookie{
+		Name:   ctx.cookieName,
 		MaxAge: -1,
 	})
 
@@ -364,62 +380,62 @@ func (a *AuthMongoDBCtx) Logout() error {
 		id := cookie.Value[:strings.Index(cookie.Value, "|")]
 		if bson.IsObjectIdHex(id) {
 			oid := bson.ObjectIdHex(id)
-			a.rememberColl.RemoveId(oid)
+			ctx.rememberColl.RemoveId(oid)
 		}
 	}
 
-	a.sess.Delete(a.sessionName)
+	ctx.sess.Delete(ctx.sessionName)
 
 	return nil
 }
 
-func (a *AuthMongoDBCtx) UpdateInfo(id model.Identifier, info *membership.Information, notif bool) error {
+func (ctx *MgoUserCtx) UpdateInfo(id model.Identifier, info *membership.UserInfo, notif bool) error {
 	tid, ok := id.(mtoy.ID)
 	if !ok {
 		return membership.ErrInvalidId
 	}
-	return a.userColl.UpdateId(tid.ObjectId, bson.M{"$set": bson.M{"info": info}})
+	return ctx.userColl.UpdateId(tid.ObjectId, bson.M{"$set": bson.M{"info": info}})
 }
 
-func (a *AuthMongoDBCtx) UpdatePrivilege(id model.Identifier, pri map[string]bool, notif bool) error {
+func (ctx *MgoUserCtx) UpdatePrivilege(id model.Identifier, pri map[string]bool, notif bool) error {
 	tid, ok := id.(mtoy.ID)
 	if !ok {
 		return membership.ErrInvalidId
 	}
-	return a.userColl.UpdateId(tid.ObjectId, bson.M{"$set": bson.M{"privilege": pri}})
+	return ctx.userColl.UpdateId(tid.ObjectId, bson.M{"$set": bson.M{"privilege": pri}})
 }
 
-func (a *AuthMongoDBCtx) ChangePassword(id model.Identifier, password string, notif bool) error {
+func (ctx *MgoUserCtx) ChangePassword(id model.Identifier, password string, notif bool) error {
 	tid, ok := id.(mtoy.ID)
 	if !ok {
 		return membership.ErrInvalidId
 	}
 
 	acc := Account{}
-	err := a.userColl.FindId(tid.ObjectId).One(&acc)
+	err := ctx.userColl.FindId(tid.ObjectId).One(&acc)
 	if err != nil {
 		return err
 	}
 
-	err = a.userColl.UpdateId(tid.ObjectId, bson.M{"$set": bson.M{
+	err = ctx.userColl.UpdateId(tid.ObjectId, bson.M{"$set": bson.M{
 		"oldpwd": acc.GetOldPassword(),
-		"pwd":    a.GeneratePassword(password),
+		"pwd":    ctx.GeneratePassword(password),
 	}})
 	if err != nil {
 		return err
 	}
 
-	return a.notifer.PasswordChanged(&acc)
+	return ctx.notifer.PasswordChanged(&acc)
 }
 
-func (a *AuthMongoDBCtx) ValidConfirmCode(id model.Identifier, key, code string, regen, del bool) (bool, error) {
+func (ctx *MgoUserCtx) ValidConfirmCode(id model.Identifier, key, code string, regen, del bool) (bool, error) {
 	tid, ok := id.(mtoy.ID)
 	if !ok {
 		return false, membership.ErrInvalidId
 	}
 
 	acc := Account{}
-	err := a.userColl.FindId(tid.ObjectId).One(&acc)
+	err := ctx.userColl.FindId(tid.ObjectId).One(&acc)
 	if err != nil {
 		return false, err
 	}
@@ -432,7 +448,7 @@ func (a *AuthMongoDBCtx) ValidConfirmCode(id model.Identifier, key, code string,
 		change["$set"] = bson.M{"confirmcodes." + key: secure.RandomString(32)}
 	}
 
-	a.userColl.UpdateId(tid.ObjectId, change)
+	ctx.userColl.UpdateId(tid.ObjectId, change)
 
 	return ok, err
 }
