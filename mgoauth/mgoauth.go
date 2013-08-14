@@ -28,6 +28,7 @@ type MgoUserCtx struct {
 	respw        http.ResponseWriter
 	notifer      membership.Notificater
 	fmtChecker   membership.FormatChecker
+	groupMngr    membership.GroupManager
 	pwdHash      hash.Hash
 	userColl     *mgo.Collection
 	rememberColl *mgo.Collection
@@ -80,6 +81,14 @@ func (ctx *MgoUserCtx) SetHashFunc(h hash.Hash) {
 
 func (ctx *MgoUserCtx) SetFormatChecker(c membership.FormatChecker) {
 	ctx.fmtChecker = c
+}
+
+func (ctx *MgoUserCtx) SetGroupManager(mngr membership.GroupManager) {
+	ctx.groupMngr = mngr
+}
+
+func (ctx *MgoUserCtx) GroupManager() membership.GroupManager {
+	return ctx.groupMngr
 }
 
 func (ctx *MgoUserCtx) GeneratePassword(password string) membership.Password {
@@ -144,14 +153,14 @@ func (ctx *MgoUserCtx) AddUser(email, password string, notif, app bool) (members
 	return u, nil
 }
 
-func (ctx *MgoUserCtx) AddUserDetail(email, password string, info *membership.UserInfo,
+func (ctx *MgoUserCtx) AddUserDetail(email, password string, info membership.UserInfo,
 	pri map[string]bool, notif, app bool) (membership.User, error) {
 	u, err := ctx.createUser(email, password, app)
 	if err != nil {
 		return nil, err
 	}
 
-	u.Info = *info
+	u.Info = info
 	u.Privilege = pri
 
 	err = ctx.insertUser(u, notif, app)
@@ -389,7 +398,7 @@ func (ctx *MgoUserCtx) Logout() error {
 	return nil
 }
 
-func (ctx *MgoUserCtx) UpdateInfo(id model.Identifier, info *membership.UserInfo, notif bool) error {
+func (ctx *MgoUserCtx) UpdateInfo(id model.Identifier, info membership.UserInfo, notif bool) error {
 	tid, ok := id.(mtoy.ID)
 	if !ok {
 		return membership.ErrInvalidId
@@ -451,4 +460,9 @@ func (ctx *MgoUserCtx) ValidConfirmCode(id model.Identifier, key, code string, r
 	ctx.userColl.UpdateId(tid.ObjectId, change)
 
 	return ok, err
+}
+
+func (ctx *MgoUserCtx) Can(u membership.User, do string) bool {
+
+	return false
 }

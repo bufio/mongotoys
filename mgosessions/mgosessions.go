@@ -1,6 +1,11 @@
 // Copyright 2012 The Toys Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
+
+/*
+Package mgosessions help you control general web session with MongoDB backend.
+This package implements github.com/kidstuff/toys/secure/membership/sessions
+*/
 package mgosessions
 
 import (

@@ -9,7 +9,12 @@ import (
 
 type Account struct {
 	Id                 bson.ObjectId `bson:"_id"`
+	GroupIds           []bson.ObjectId
 	membership.Account `bson:",inline"`
+	BriefGroups        []struct {
+		Id   bson.ObjectId
+		Name string
+	}
 }
 
 func (a *Account) GetId() model.Identifier {
@@ -28,4 +33,14 @@ func (a *Account) SetId(id model.Identifier) error {
 	}
 	a.Id = tid.ObjectId
 	return nil
+}
+
+func (a *Account) GetBriefGroups() []membership.BriefGroup {
+	n := len(a.BriefGroups)
+	idLst := make([]membership.BriefGroup, n, n)
+	for idx, brief := range a.BriefGroups {
+		idLst[idx] = membership.BriefGroup{mtoy.ID{brief.Id}, brief.Name}
+	}
+
+	return idLst
 }
